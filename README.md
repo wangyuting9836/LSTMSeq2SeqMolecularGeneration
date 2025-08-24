@@ -174,14 +174,14 @@ class SMILESAutoencoder(nn.Module):
     ):
         super().__init__()
         self.n_layers = n_layers
-        # 解码器
+        # 编码器
         self.encoder = Encoder(vocab_size, lstm_dim, n_layers, dropout)
         # 瓶颈层：把 n_layers*lstm_dim*2 -> latent_dim
         self.bottleneck = nn.Linear(2 * n_layers * lstm_dim, latent_dim)
         # 恢复：latent_dim -> n_layers*lstm_dim
         self.latent2hidden = nn.Linear(latent_dim, n_layers * lstm_dim)
         self.latent2cell = nn.Linear(latent_dim, n_layers * lstm_dim)
-        # 编码器
+        # 解码器
         self.decoder = Decoder(vocab_size, lstm_dim, n_layers, dropout)
 
     def encode(self, x):
