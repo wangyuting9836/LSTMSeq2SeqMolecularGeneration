@@ -56,7 +56,7 @@ train_ds, test_ds, char2idx, idx2char = load_and_split_data("gdb11/gdb11_size08.
 
 函数实现如下。
 
-```python3
+```python
 def build_vocabulary(smiles_list):
     """根据SMILES列表构建词汇表与映射字典"""
     chars = set("".join(smiles_list))
@@ -129,7 +129,7 @@ def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=Non
 | Encoder | Linear(2*n_layers*512 → 256)，ReLU |
 | Decoder | nn.LSTM → (h, c)，层数=2，隐藏维=512 |
 
-```python3
+```python
 model = SMILESAutoencoder(
     vocab_size=len(char2idx),
     lstm_dim=512,
@@ -231,13 +231,13 @@ class SMILESAutoencoder(nn.Module):
 -   **ReduceLROnPlateau**：验证集 10 个 epoch 不下降 → 学习率 × 0.5。
 -   **Early Stopping**：验证集 10 个 epoch 不下降 → 直接停。
 
-```python3
+```python
 train(model, train_loader, test_loader, epochs=50, lr=1e-3, patience=10)
 ```
 
 具体实现如下。
 
-```python3
+```python
 def train(
         model,
         train_loader,
@@ -317,7 +317,7 @@ visualize_one_smiles(smi) # 可视化
 
 具体实现如下。
 
-```text
+```Python
 @torch.no_grad()
 def generate_from_latent(model, z, char2idx, idx2char, max_len=50, temperature=1.0):
     model.eval()
@@ -379,7 +379,7 @@ $p_i=\frac{exp(\frac{o_i}{T})}{\varSigma _jexp(\frac{o_j}{T})}$
 
 随机选取两个分子，通过解码器映射到潜空间，然后插值生成十个潜空间向量 **z**，在利用上面的generate\_from\_latent生成分子。这可以让已有的分子“变形”。
 
-```text
+```Python
 with torch.no_grad():
     idx1, idx2 = random.sample(range(len(test_ds)), 2)
     x1, _ = test_ds[idx1]
