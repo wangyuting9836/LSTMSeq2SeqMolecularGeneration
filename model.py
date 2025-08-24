@@ -8,7 +8,10 @@ class Encoder(nn.Module):
         self.lstm = nn.LSTM(vocab_size, lstm_dim, n_layers, batch_first=True, dropout=dropout)
 
     def forward(self, x):
-        # x: (B, T, V)
+        """
+        x: (B, T, V)
+        返回 (n_layers, B, lstm_dim)
+        """
         _, (h_n, c_n) = self.lstm(x)
         return h_n, c_n  # (n_layers, B, lstm_dim)
 
@@ -20,7 +23,14 @@ class Decoder(nn.Module):
         self.fc = nn.Linear(lstm_dim, vocab_size)
 
     def forward(self, x, h, c):
-        # x: (B, T, V)  h/c: (n_layers, B, lstm_dim)
+        """
+        x: (B, T, V)
+        h: (n_layers, B, lstm_dim)
+        c: (n_layers, B, lstm_dim)
+        返回
+            logits: (B, T, V),
+            (h, c): ((n_layers, B, lstm_dim), (n_layers, B, lstm_dim))
+        """
         output, (h, c) = self.lstm(x, (h, c)) # output: (B, T, lstm_dim)  h/c: (n_layers, B, lstm_dim)
         logits = self.fc(output)  # (B, T, V)
         return logits, h, c
@@ -60,6 +70,7 @@ class SMILESAutoencoder(nn.Module):
         """
         z: (B, latent_dim)
         target: (B, T, V)  用于teacher forcing
+        返回  (B, T - 1, V)
         """
         B = z.size(0)
         h = torch.relu(self.latent2hidden(z))  # (B, n_layers*lstm_dim)
@@ -83,6 +94,13 @@ class SMILESAutoencoder(nn.Module):
         return logits
 
     def forward(self, x, y, teacher_forcing=True):
+        """
+        x: (B, T, V)
+        y: (B, T, V)  用于teacher forcing
+        返回
+            logits: (B, T - 1, V)
+            z: (B, latent_dim) 潜空间向量
+        """
         z = self.encode(x)
         logits = self.decode(z, y, teacher_forcing)
         return logits, z

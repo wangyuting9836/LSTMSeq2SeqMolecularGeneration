@@ -18,14 +18,11 @@ def build_vocabulary(smiles_list):
     return char2idx, idx2char
 
 
-def vectorize(smiles_list, char2idx, max_len=None):
+def vectorize(smiles_list, char2idx, max_len):
     """
     将SMILES字符串列表转化为one-hot张量
     返回 (X, Y)
     """
-    if max_len is None:
-        max_len = max(len(s) for s in smiles_list) + 5
-
     vocab_size = len(char2idx)
     X = np.zeros((len(smiles_list), max_len, vocab_size), dtype=np.float32)
     Y = np.zeros((len(smiles_list), max_len, vocab_size), dtype=np.float32)
@@ -50,15 +47,18 @@ def vectorize(smiles_list, char2idx, max_len=None):
     return torch.tensor(X), torch.tensor(Y)
 
 
-def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=None):
+def load_and_split_data(smi_path, train_ratio=0.8, sample_size=None):
     """
     读取.smi文件并划分训练/测试集
-    返回 (train_ds, test_ds, char2idx, idx2char)
+    返回 (train_ds, test_ds, char2idx, idx2char, max_len, vocab_size)
     """
     data = pd.read_csv(smi_path, sep="\t", header=None, names=["smiles", "No", "Int"])
     smiles = data["smiles"].tolist()
     if sample_size:
         smiles = smiles[:sample_size]
+
+    # T
+    max_len = max(len(s) for s in smiles) + 2  # <go> + chars + <eos>
 
     char2idx, idx2char = build_vocabulary(smiles)
     X, Y = vectorize(smiles, char2idx, max_len)
@@ -71,7 +71,7 @@ def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=Non
         [n_train, n_total - n_train],
         generator=torch.Generator().manual_seed(42),
     )
-    return train_ds, test_ds, char2idx, idx2char
+    return train_ds, test_ds, char2idx, idx2char, max_len, len(char2idx)
 
 
 def indices_to_smiles(indices, idx2char):
