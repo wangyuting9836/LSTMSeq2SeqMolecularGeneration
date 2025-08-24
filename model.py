@@ -21,7 +21,7 @@ class Decoder(nn.Module):
 
     def forward(self, x, h, c):
         # x: (B, T, V)  h/c: (n_layers, B, lstm_dim)
-        output, (h, c) = self.lstm(x, (h, c))
+        output, (h, c) = self.lstm(x, (h, c)) # output: (B, T, lstm_dim)  h/c: (n_layers, B, lstm_dim)
         logits = self.fc(output)  # (B, T, V)
         return logits, h, c
 
