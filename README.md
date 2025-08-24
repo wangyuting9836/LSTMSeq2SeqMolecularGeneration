@@ -228,7 +228,7 @@ class SMILESAutoencoder(nn.Module):
 ## 4\. 训练验证
 
 -   **Teacher Forcing**：解码器每一步都看到真值，收敛更快。
--   **ReduceLROnPlateau**：验证集 10 个 epoch 不下降 → 学习率 × 0.5。
+-   **ReduceLROnPlateau**：验证集 5 个 epoch 不下降 → 学习率 × 0.5。
 -   **Early Stopping**：验证集 10 个 epoch 不下降 → 直接停。
 
 ```python
