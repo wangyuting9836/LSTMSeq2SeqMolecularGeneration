@@ -10,22 +10,6 @@
 
 目录
 
-收起
-
-0\. 为什么用 Seq2Seq 生成分子？
-
-1\. 数据集准备
-
-2\. 根据数据集构建词汇表， 把SMILES 变成one-hot张量
-
-3\. 模型
-
-4\. 训练验证
-
-5\. 随机从潜空间采样生成分子
-
-6\. 潜空间插值生成分子
-
 ## 0\. 为什么用 Seq2Seq 生成分子？
 
 Seq2Seq 把 SMILES 当成普通字符串：
@@ -46,17 +30,24 @@ GDB-13数据库通过应用简单的化学稳定性与合成可行性规则，�
 
 链接如下。
 
-[GDB Databases​gdb.unibe.ch/downloads/](https://link.zhihu.com/?target=https%3A//gdb.unibe.ch/downloads/)
+[](https://link.zhihu.com/?target=https%3A//gdb.unibe.ch/downloads/)
 
-## 2\. 根据数据集构建词汇表， 把SMILES 变成one-hot张量
+## 2\. 根据数据集构建词汇表， 把SMILES 变成[one-hot张量](https://zhida.zhihu.com/search?content_id=262174133&content_type=Article&match_order=1&q=one-hot%E5%BC%A0%E9%87%8F&zhida_source=entity)
 
-```text
-train_ds, test_ds, char2idx, idx2char = load_and_split_data("gdb11/gdb11_size08.smi", sample_size=None)
+```python
+train_ds, test_ds, char2idx, idx2char, max_len, vocab_size = load_and_split_data("gdb11/gdb11_size08.smi", sample_size=None)
+train_loader = DataLoader(train_ds, batch_size=256, shuffle=True)
+test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
 ```
 
 函数实现如下。
 
 ```python
+# 特殊标记
+GO = "<go>"
+EOS = "<eos>"
+
+
 def build_vocabulary(smiles_list):
     """根据SMILES列表构建词汇表与映射字典"""
     chars = set("".join(smiles_list))
@@ -66,14 +57,12 @@ def build_vocabulary(smiles_list):
     idx2char = {i: c for c, i in char2idx.items()}
     return char2idx, idx2char
 
-def vectorize(smiles_list, char2idx, max_len=None):
+
+def vectorize(smiles_list, char2idx, max_len):
     """
     将SMILES字符串列表转化为one-hot张量
     返回 (X, Y)
     """
-    if max_len is None:
-        max_len = max(len(s) for s in smiles_list) + 5
-
     vocab_size = len(char2idx)
     X = np.zeros((len(smiles_list), max_len, vocab_size), dtype=np.float32)
     Y = np.zeros((len(smiles_list), max_len, vocab_size), dtype=np.float32)
@@ -97,15 +86,19 @@ def vectorize(smiles_list, char2idx, max_len=None):
 
     return torch.tensor(X), torch.tensor(Y)
 
-def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=None):
+
+def load_and_split_data(smi_path, train_ratio=0.8, sample_size=None):
     """
     读取.smi文件并划分训练/测试集
-    返回 (train_ds, test_ds, char2idx, idx2char)
+    返回 (train_ds, test_ds, char2idx, idx2char, max_len, vocab_size)
     """
     data = pd.read_csv(smi_path, sep="\t", header=None, names=["smiles", "No", "Int"])
     smiles = data["smiles"].tolist()
     if sample_size:
         smiles = smiles[:sample_size]
+
+    # T
+    max_len = max(len(s) for s in smiles) + 2  # <go> + chars + <eos>
 
     char2idx, idx2char = build_vocabulary(smiles)
     X, Y = vectorize(smiles, char2idx, max_len)
@@ -118,7 +111,19 @@ def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=Non
         [n_train, n_total - n_train],
         generator=torch.Generator().manual_seed(42),
     )
-    return train_ds, test_ds, char2idx, idx2char
+    return train_ds, test_ds, char2idx, idx2char, max_len, len(char2idx)
+
+
+def indices_to_smiles(indices, idx2char):
+    """将索引序列转为SMILES字符串"""
+    chars = []
+    for idx in indices:
+        c = idx2char[idx.item()]
+        if c == EOS:
+            break
+        if c != GO:
+            chars.append(c)
+    return "".join(chars)
 ```
 
 ## 3\. 模型
@@ -126,7 +131,7 @@ def load_and_split_data(smi_path, train_ratio=0.8, max_len=None, sample_size=Non
 | 模块 | 作用 |
 | --- | --- |
 | Encoder | nn.LSTM → (h, c)，层数=2，隐藏维=512 |
-| Encoder | Linear(2*n_layers*512 → 256)，ReLU |
+| Bottleneck | Linear(2*n_layers*512 → 256)，ReLU |
 | Decoder | nn.LSTM → (h, c)，层数=2，隐藏维=512 |
 
 ```python
@@ -147,9 +152,13 @@ class Encoder(nn.Module):
         self.lstm = nn.LSTM(vocab_size, lstm_dim, n_layers, batch_first=True, dropout=dropout)
 
     def forward(self, x):
-        # x: (B, T, V)
+        """
+        x: (B, T, V)
+        返回 (n_layers, B, lstm_dim)
+        """
         _, (h_n, c_n) = self.lstm(x)
         return h_n, c_n  # (n_layers, B, lstm_dim)
+
 
 class Decoder(nn.Module):
     def __init__(self, vocab_size, lstm_dim, n_layers=1, dropout=0.0):
@@ -158,10 +167,18 @@ class Decoder(nn.Module):
         self.fc = nn.Linear(lstm_dim, vocab_size)
 
     def forward(self, x, h, c):
-        # x: (B, T, V)  h/c: (n_layers, B, lstm_dim)
-        output, (h, c) = self.lstm(x, (h, c))
+        """
+        x: (B, T, V)
+        h: (n_layers, B, lstm_dim)
+        c: (n_layers, B, lstm_dim)
+        返回
+            logits: (B, T, V),
+            (h, c): ((n_layers, B, lstm_dim), (n_layers, B, lstm_dim))
+        """
+        output, (h, c) = self.lstm(x, (h, c)) # output: (B, T, lstm_dim)  h/c: (n_layers, B, lstm_dim)
         logits = self.fc(output)  # (B, T, V)
         return logits, h, c
+
 
 class SMILESAutoencoder(nn.Module):
     def __init__(
@@ -174,17 +191,21 @@ class SMILESAutoencoder(nn.Module):
     ):
         super().__init__()
         self.n_layers = n_layers
-        # 编码器
+        # 解码器
         self.encoder = Encoder(vocab_size, lstm_dim, n_layers, dropout)
         # 瓶颈层：把 n_layers*lstm_dim*2 -> latent_dim
         self.bottleneck = nn.Linear(2 * n_layers * lstm_dim, latent_dim)
         # 恢复：latent_dim -> n_layers*lstm_dim
         self.latent2hidden = nn.Linear(latent_dim, n_layers * lstm_dim)
         self.latent2cell = nn.Linear(latent_dim, n_layers * lstm_dim)
-        # 解码器
+        # 编码器
         self.decoder = Decoder(vocab_size, lstm_dim, n_layers, dropout)
 
     def encode(self, x):
+        """
+        x: (B, T, V)
+        返回  (B, latent_dim) 潜空间向量
+        """
         h_n, c_n = self.encoder(x)  # (n_layers, B, lstm_dim)
         # 展平层维
         states = torch.cat([h_n, c_n], dim=0)  # (2*n_layers, B, lstm_dim)
@@ -197,6 +218,7 @@ class SMILESAutoencoder(nn.Module):
         """
         z: (B, latent_dim)
         target: (B, T, V)  用于teacher forcing
+        返回  (B, T - 1, V)
         """
         B = z.size(0)
         h = torch.relu(self.latent2hidden(z))  # (B, n_layers*lstm_dim)
@@ -220,6 +242,13 @@ class SMILESAutoencoder(nn.Module):
         return logits
 
     def forward(self, x, y, teacher_forcing=True):
+        """
+        x: (B, T, V)
+        y: (B, T, V)  用于teacher forcing
+        返回
+            logits: (B, T - 1, V)
+            z: (B, latent_dim) 潜空间向量
+        """
         z = self.encode(x)
         logits = self.decode(z, y, teacher_forcing)
         return logits, z
@@ -229,7 +258,7 @@ class SMILESAutoencoder(nn.Module):
 
 -   **Teacher Forcing**：解码器每一步都看到真值，收敛更快。
 -   **ReduceLROnPlateau**：验证集 5 个 epoch 不下降 → 学习率 × 0.5。
--   **Early Stopping**：验证集 10 个 epoch 不下降 → 直接停。
+-   **[Early Stopping](https://zhida.zhihu.com/search?content_id=262174133&content_type=Article&match_order=1&q=Early+Stopping&zhida_source=entity)**：验证集 10 个 epoch 不下降 → 直接停。
 
 ```python
 train(model, train_loader, test_loader, epochs=50, lr=1e-3, patience=10)
@@ -306,18 +335,17 @@ def train(
 ## 5\. 随机从潜空间采样生成分子
 
 ```python
-# 4. 加载最佳模型并生成分子
 model.load_state_dict(torch.load("best_model.pth", weights_only=True, map_location=device)) # 加载最佳模型
 
 z_rand = torch.randn(1, 256, device=device) # 随机从潜在空间采样
-smi = generate_from_latent(model, z_rand, char2idx, idx2char, temperature=1.0)
+smi = generate_from_latent(model, z_rand, char2idx, idx2char, max_len=max_len, temperature=1.0)
 print("Random generation:", smi)
 visualize_one_smiles(smi) # 可视化
 ```
 
 具体实现如下。
 
-```Python
+```python
 @torch.no_grad()
 def generate_from_latent(model, z, char2idx, idx2char, max_len=50, temperature=1.0):
     model.eval()
@@ -352,9 +380,11 @@ def generate_from_latent(model, z, char2idx, idx2char, max_len=50, temperature=1
         inp[0, 0, next_id] = 1.0
     return smiles
 
+
 def visualize_one_smiles(smile):
     mol = Chem.MolFromSmiles(smile)
     if mol:
+        Draw.MolToFile(mol, "molecule.png", size=(300, 300), kekulize=True)
         Draw.MolToImage(mol, size=(300, 300), kekulize=True)
         Draw.ShowMol(mol, size=(300, 300), kekulize=False)
     else:
@@ -379,7 +409,7 @@ $p_i=\frac{exp(\frac{o_i}{T})}{\varSigma _jexp(\frac{o_j}{T})}$
 
 随机选取两个分子，通过解码器映射到潜空间，然后插值生成十个潜空间向量 **z**，在利用上面的generate\_from\_latent生成分子。这可以让已有的分子“变形”。
 
-```Python
+```python
 with torch.no_grad():
     idx1, idx2 = random.sample(range(len(test_ds)), 2)
     x1, _ = test_ds[idx1]
@@ -389,9 +419,10 @@ with torch.no_grad():
     z1 = model.encode(x1)
     z2 = model.encode(x2)
 
-inter_smiles = interpolate(model, z1.squeeze(0), z2.squeeze(0), n_steps=10, char2idx=char2idx, idx2char=idx2char)
+inter_smiles = interpolate(model, z1.squeeze(0), z2.squeeze(0), n_steps=10, char2idx=char2idx, idx2char=idx2char, max_len=max_len)
 print("Interpolation smiles:", inter_smiles)
 visualize_smiles(inter_smiles) # 可视化
+
 
 def interpolate(model, z1, z2, n_steps=10, **kwargs):
     alphas = np.linspace(0, 1, n_steps)
@@ -401,6 +432,19 @@ def interpolate(model, z1, z2, n_steps=10, **kwargs):
         smi = generate_from_latent(model, z.unsqueeze(0), **kwargs)
         smiles_list.append(smi)
     return smiles_list
+
+
+def visualize_smiles(smiles_list, mols_per_row=5):
+    mols = []
+    for smi in smiles_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol:
+            mols.append(mol)
+    if mols:
+        img = Draw.MolsToGridImage(mols, molsPerRow=mols_per_row)
+        img.show()
+    else:
+        print("No valid molecules to display.")
 ```
 
 生成的分子如下。
